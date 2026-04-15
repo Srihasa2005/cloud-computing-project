@@ -68,35 +68,40 @@ def build(tag, context, no_cache=False):
             source_path = os.path.expanduser(src)
             source_path = source_path if os.path.isabs(source_path) else os.path.join(context, source_path)
 
-            # 🔥 CACHE HIT / MISS
+            # 🔥 FINAL CACHE LOGIC
             file_hash = hash_dir(source_path)
             key = sha256_string(prev_digest + line + workdir + file_hash)
             cache_file = f"{DOCK_DIR}/cache/{key}"
 
-            if os.path.exists(cache_file):
+            if os.path.exists(cache_file) and not no_cache:
                 print("[CACHE HIT]")
+                layer_digest = open(cache_file).read()
             else:
                 print("[CACHE MISS]")
 
-            dest_path = temp_dir + dest
+                dest_path = temp_dir + dest
 
-            if not os.path.exists(source_path):
-                raise FileNotFoundError(f"Source path not found: {source_path}")
+                if not os.path.exists(source_path):
+                    raise FileNotFoundError(f"Source path not found: {source_path}")
 
-            if os.path.isdir(source_path):
-                shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
-            else:
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                shutil.copy2(source_path, dest_path)
+                if os.path.isdir(source_path):
+                    shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    shutil.copy2(source_path, dest_path)
 
-            tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
-            if os.path.exists(tar_path):
-                os.remove(tar_path)
+                tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
+                if os.path.exists(tar_path):
+                    os.remove(tar_path)
 
-            create_tar(temp_dir, tar_path)
+                create_tar(temp_dir, tar_path)
 
-            layer_digest = sha256_file(tar_path)
-            shutil.move(tar_path, f"{DOCK_DIR}/layers/{layer_digest}.tar")
+                layer_digest = sha256_file(tar_path)
+                shutil.move(tar_path, f"{DOCK_DIR}/layers/{layer_digest}.tar")
+
+                # 🔥 SAVE CACHE
+                with open(cache_file, "w") as f:
+                    f.write(layer_digest)
 
             layers.append(layer_digest)
             prev_digest = layer_digest
