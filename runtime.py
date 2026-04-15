@@ -29,6 +29,11 @@ def run_image(tag, env_override):
         if os.path.exists(layer_path):
             extract_tar(layer_path, temp_dir)
 
+    # Environment variables (NEW)
+    env = os.environ.copy()
+    env.update(data["config"].get("Env", {}))
+    env.update(env_override)
+
     # Working directory
     workdir = data["config"].get("WorkingDir", "/")
     full_workdir = os.path.join(temp_dir, workdir.lstrip("/"))
@@ -40,8 +45,14 @@ def run_image(tag, env_override):
     # Execute command
     cmd = eval(data["config"]["Cmd"])
 
-    subprocess.run(
-        cmd,
-        cwd=full_workdir,
-        check=True
-    )
+    try:
+        subprocess.run(
+            cmd,
+            cwd=full_workdir,
+            env=env,
+            check=True
+        )
+    finally:
+        # Cleanup (NEW)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
