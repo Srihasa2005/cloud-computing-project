@@ -22,6 +22,7 @@ def build(tag, context, no_cache=False):
 
     os.makedirs(temp_dir, exist_ok=True)
     os.makedirs(f"{DOCK_DIR}/layers", exist_ok=True)
+    os.makedirs(f"{DOCK_DIR}/images", exist_ok=True)
 
     layers = []
     prev_digest = ""
@@ -64,7 +65,7 @@ def build(tag, context, no_cache=False):
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copy2(source_path, dest_path)
 
-            # 🔥 create layer after COPY
+            # create layer after COPY
             tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
             if os.path.exists(tar_path):
                 os.remove(tar_path)
@@ -85,7 +86,7 @@ def build(tag, context, no_cache=False):
 
             subprocess.run(run_cmd, shell=True, check=True)
 
-            # 🔥 create layer after RUN
+            # create layer after RUN
             tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
             if os.path.exists(tar_path):
                 os.remove(tar_path)
@@ -100,3 +101,44 @@ def build(tag, context, no_cache=False):
 
         elif instr == "CMD":
             cmd = arg
+
+    # 🔥 COMMIT 3 PART — MANIFEST
+
+    name, image_tag = tag.split(":")
+
+    manifest = {
+        "name": name,
+        "tag": image_tag,
+        "digest": "",
+        "config": {
+            "Env": env,
+            "Cmd": cmd,
+            "WorkingDir": workdir
+        },
+        "layers": [],
+        "created": time.ctime()
+    }
+
+    for layer in layers:
+        path = f"{DOCK_DIR}/layers/{layer}.tar"
+
+        if not os.path.exists(path):
+            continue
+
+        size = os.path.getsize(path)
+
+        manifest["layers"].append({
+            "digest": f"sha256:{layer}",
+            "size": size,
+            "createdBy": "instruction"
+        })
+
+    manifest_bytes = json.dumps(manifest, sort_keys=True).encode()
+    import hashlib
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    manifest["digest"] = f"sha256:{digest}"
+
+    with open(f"{DOCK_DIR}/images/{name}_{image_tag}.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    print("Build complete!")
