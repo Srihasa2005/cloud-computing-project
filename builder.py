@@ -4,6 +4,7 @@ import json
 import time
 import tempfile
 import subprocess
+import hashlib
 from utils import *
 
 DOCK_DIR = os.path.expanduser("~/.docksmith")
@@ -11,6 +12,18 @@ DOCK_DIR = os.path.expanduser("~/.docksmith")
 def parse_file(path):
     with open(path) as f:
         return [line.strip() for line in f if line.strip()]
+
+def hash_dir(path):
+    h = hashlib.sha256()
+    for root, dirs, files in os.walk(path):
+        for f in sorted(files):
+            file_path = os.path.join(root, f)
+            try:
+                with open(file_path, "rb") as fp:
+                    h.update(fp.read())
+            except:
+                continue
+    return h.hexdigest()
 
 def build(tag, context, no_cache=False):
     lines = parse_file(os.path.join(context, "Docksmithfile"))
@@ -23,6 +36,7 @@ def build(tag, context, no_cache=False):
     os.makedirs(temp_dir, exist_ok=True)
     os.makedirs(f"{DOCK_DIR}/layers", exist_ok=True)
     os.makedirs(f"{DOCK_DIR}/images", exist_ok=True)
+    os.makedirs(f"{DOCK_DIR}/cache", exist_ok=True)
 
     layers = []
     prev_digest = ""
@@ -54,26 +68,40 @@ def build(tag, context, no_cache=False):
             source_path = os.path.expanduser(src)
             source_path = source_path if os.path.isabs(source_path) else os.path.join(context, source_path)
 
-            dest_path = temp_dir + dest
+            # 🔥 FINAL CACHE LOGIC
+            file_hash = hash_dir(source_path)
+            key = sha256_string(prev_digest + line + workdir + file_hash)
+            cache_file = f"{DOCK_DIR}/cache/{key}"
 
-            if not os.path.exists(source_path):
-                raise FileNotFoundError(f"Source path not found: {source_path}")
-
-            if os.path.isdir(source_path):
-                shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+            if os.path.exists(cache_file) and not no_cache:
+                print("[CACHE HIT]")
+                layer_digest = open(cache_file).read()
             else:
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                shutil.copy2(source_path, dest_path)
+                print("[CACHE MISS]")
 
-            # create layer after COPY
-            tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
-            if os.path.exists(tar_path):
-                os.remove(tar_path)
+                dest_path = temp_dir + dest
 
-            create_tar(temp_dir, tar_path)
+                if not os.path.exists(source_path):
+                    raise FileNotFoundError(f"Source path not found: {source_path}")
 
-            layer_digest = sha256_file(tar_path)
-            shutil.move(tar_path, f"{DOCK_DIR}/layers/{layer_digest}.tar")
+                if os.path.isdir(source_path):
+                    shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    shutil.copy2(source_path, dest_path)
+
+                tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
+                if os.path.exists(tar_path):
+                    os.remove(tar_path)
+
+                create_tar(temp_dir, tar_path)
+
+                layer_digest = sha256_file(tar_path)
+                shutil.move(tar_path, f"{DOCK_DIR}/layers/{layer_digest}.tar")
+
+                # 🔥 SAVE CACHE
+                with open(cache_file, "w") as f:
+                    f.write(layer_digest)
 
             layers.append(layer_digest)
             prev_digest = layer_digest
@@ -86,7 +114,6 @@ def build(tag, context, no_cache=False):
 
             subprocess.run(run_cmd, shell=True, check=True)
 
-            # create layer after RUN
             tar_path = os.path.join(tempfile.gettempdir(), "layer.tar")
             if os.path.exists(tar_path):
                 os.remove(tar_path)
@@ -101,8 +128,6 @@ def build(tag, context, no_cache=False):
 
         elif instr == "CMD":
             cmd = arg
-
-    # 🔥 COMMIT 3 PART — MANIFEST
 
     name, image_tag = tag.split(":")
 
@@ -121,7 +146,6 @@ def build(tag, context, no_cache=False):
 
     for layer in layers:
         path = f"{DOCK_DIR}/layers/{layer}.tar"
-
         if not os.path.exists(path):
             continue
 
@@ -134,7 +158,6 @@ def build(tag, context, no_cache=False):
         })
 
     manifest_bytes = json.dumps(manifest, sort_keys=True).encode()
-    import hashlib
     digest = hashlib.sha256(manifest_bytes).hexdigest()
     manifest["digest"] = f"sha256:{digest}"
 
